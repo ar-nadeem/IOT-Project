@@ -1,11 +1,12 @@
 #include <Wire.h>
-#include "MAX30105.h"
-#include "heartRate.h"
 #include <WiFi.h>
 #include <Arduino_JSON.h>
 #include <assert.h>
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
+#include "MAX30105.h"
+#include "heartRate.h"
+#include <HTTPClient.h>
 
 MAX30105 particleSensor;
 
@@ -24,7 +25,7 @@ int beatAvg;
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////     Wifi Server        ///////////////////////////////////////////////////
+//////////////////////////////////////////////      Wifi Server        ///////////////////////////////////////////////////
 const char* ssid     = "The Gateway";
 const char* password = "HokieHouse";
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -36,14 +37,18 @@ byte yellowLED=12;
 byte greenLED=14;
 byte blueLED=27;
 JSONVar heartJson;
+JSONVar acc;
 
-
+// Create HTTP client instance
+HTTPClient http;
 
 void setup()
 {
 
   heartJson["heart"] = -1;
   heartJson["heart_avg"] = -1;
+  acc["temp"] = -1;
+  acc["z"] = -1;
   
   pinMode(redLED, OUTPUT);
   pinMode(yellowLED, OUTPUT);
@@ -55,21 +60,32 @@ void setup()
   Serial.begin(115200); // initialize serial communication at 115200 bits per second:
 
   // Connect to wifi and start the server
-  // Serial.print("Connecting to ");
-  // Serial.println(ssid);
-  // WiFi.begin(ssid, password);
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, password);
 
-  //   while (WiFi.status() != WL_CONNECTED) {
-  //       delay(500);
-  //       Serial.print(".");
-  //   }
-  //   Serial.println("");
-  //   Serial.println("WiFi connected.");
-  //   Serial.println("IP address: ");
-  //   Serial.println(WiFi.localIP());
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("");
+    Serial.println("WiFi connected.");
+    Serial.println("IP address: ");
+    Serial.println(WiFi.localIP());
     
-  // server.begin();
 
+  if (!mpu.begin()) {
+    Serial.println("Failed to find MPU6050 chip");
+      while (1){
+        digitalWrite(redLED,HIGH);
+        delay(1000);
+        digitalWrite(redLED,LOW);
+        delay(1000);
+    }
+  }
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  mpu.setFilterBandwidth(MPU6050_BAND_5_HZ);
 
 
   // Initialize sensor
@@ -90,18 +106,6 @@ void setup()
   particleSensor.setPulseAmplitudeGreen(0); //Turn off Green LED
 
   
-  if (!mpu.begin()) {
-    Serial.println("Failed to find MPU6050 chip");
-      while (1){
-        digitalWrite(redLED,HIGH);
-        delay(1000);
-        digitalWrite(redLED,LOW);
-        delay(1000);
-    }
-  }
-  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
-  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
-  mpu.setFilterBandwidth(MPU6050_BAND_5_HZ);
 
 
 
@@ -114,38 +118,43 @@ void setup()
     digitalWrite(yellowLED,LOW);
     delay(100);
   }
-
-
+  // Specify the endpoint URL
 }
 
 
-void getAccTemp(){
+JSONVar getAccTemp(){
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
-  Serial.print("Acceleration X: ");
-  Serial.print(a.acceleration.x);
-  Serial.print(", Y: ");
-  Serial.print(a.acceleration.y);
-  Serial.print(", Z: ");
-  Serial.print(a.acceleration.z);
-  Serial.println(" m/s^2");
+  // Serial.print("Acceleration X: ");
+  // Serial.print(a.acceleration.x);
+  // Serial.print(", Y: ");
+  // Serial.print(a.acceleration.y);
+  // Serial.print(", Z: ");
+  // Serial.print(a.acceleration.z);
+  // Serial.println(" m/s^2");
+  
+  // Serial.print("Rotation X: ");
+  // Serial.print(g.gyro.x);
+  // Serial.print(", Y: ");
+  // Serial.print(g.gyro.y);
+  // Serial.print(", Z: ");
+  // Serial.print(g.gyro.z);
+  // Serial.println(" rad/s");
 
-  Serial.print("Rotation X: ");
-  Serial.print(g.gyro.x);
-  Serial.print(", Y: ");
-  Serial.print(g.gyro.y);
-  Serial.print(", Z: ");
-  Serial.print(g.gyro.z);
-  Serial.println(" rad/s");
+  // Serial.print("Temperature: ");
+  // Serial.print(temp.temperature);
+  // Serial.println(" degC");
 
-  Serial.print("Temperature: ");
-  Serial.print(temp.temperature);
-  Serial.println(" degC");
+  // Serial.println("");
+  JSONVar myObject;
 
-  Serial.println("");
+  myObject["temp"] = temp.temperature;
+  myObject["z"] = a.acceleration.z;
+  return myObject;
 }
 
 JSONVar getHeart(){
+  for(int i=0;i <10;i++){
     long irValue = particleSensor.getIR();
 
     if (checkForBeat(irValue) == true) {
@@ -166,18 +175,7 @@ JSONVar getHeart(){
         beatAvg /= RATE_SIZE;
       }
     }
-
-    Serial.print("IR=");
-    Serial.print(irValue);
-    Serial.print(", BPM=");
-    Serial.print(beatsPerMinute);
-    Serial.print(", Avg BPM=");
-    Serial.print(beatAvg);
-
-    if (irValue < 50000)
-      Serial.print(" No finger?");
-
-    Serial.println();
+  }
 
     JSONVar myObject;
 
@@ -190,19 +188,46 @@ JSONVar getHeart(){
 
 void loop()
 {
+  digitalWrite(greenLED, !digitalRead(greenLED));
+  heartJson = getHeart();
+  acc = getAccTemp();
 
-  // heartJson = getHeart();
-  // digitalWrite(greenLED,HIGH);
-  // Serial.println(heartJson["sp"]);
-  // Serial.println(heartJson["heart"]);
-  
-  getAccTemp();
+  Serial.println(heartJson["heart"]);
+  Serial.println(heartJson["heart_avg"]);
+  Serial.println(acc["temp"]);
+  Serial.println(acc["z"]);
+
+  // Create an array to hold heartJson and acc data
+  JSONVar myJson;
+  myJson["heartJ"] = heartJson;
+  myJson["acc"] = acc;
+
+  // Serialize JSON data to a string
+  String postData = JSON.stringify(myJson);
 
 
+  digitalWrite(blueLED, !digitalRead(blueLED));
+  http.begin("http://192.168.1.24:3000/data");
+
+  // Set content type header
+  http.addHeader("Content-Type", "application/json");
+
+  // Send the POST request with JSON data
+  int httpResponseCode = http.POST(postData);
+
+  // Check for response
+  if (httpResponseCode > 0) {
+    String response = http.getString();
+    Serial.println(httpResponseCode);
+    Serial.println(response);
+  } else {
+    Serial.print("Error on sending POST: ");
+    Serial.println(httpResponseCode);
+  }
+  digitalWrite(blueLED, !digitalRead(blueLED));
+  // End HTTP connection
+  http.end();
 
 
-
-
-  digitalWrite(greenLED,LOW);
   
 }
