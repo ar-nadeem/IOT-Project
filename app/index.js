@@ -1,38 +1,77 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
+const mqtt = require('mqtt');
 
 const app = express();
-const port = 3000;
+const port = 3001;
 app.use(cors());
+
+let storedDataHeart = [];
+let storedDataAcc = [];
+
+let falls = 0;
+
 
 // Middleware to parse JSON data
 app.use(bodyParser.json());
+const brokerUrl = 'mqtt://localhost';
 
-let storedData = [];
-let falls = 0;
+function retrieveMqttData() {
+  // Create an MQTT client
+  const client = mqtt.connect(brokerUrl);
+  const topic = "data/#"; // Changed to 'data/#' to match your desired topic
 
-// Route to handle POST requests and store the data
-app.post('/data', (req, res) => {
-  const { heartJ, acc } = req.body;
+  // Handle connection events
+  client.on('connect', () => {
+      console.log('Connected to MQTT broker');
 
-  // Store the received data
-  storedData.push({ heartJ, acc });
+      // Subscribe to the topic
+      client.subscribe(topic, (error) => {
+          if (!error) {
+              console.log(`Subscribed to topic "${topic}"`);
+          } else {
+              console.error('Error subscribing to topic:', error);
+          }
+      });
+  });
 
-  // Check for falls in the last 10 data entries
-  falls = 0;
-  for (let i = Math.max(storedData.length - 10, 0); i < storedData.length; i++) {
-    const accZ = storedData[i].acc.z;
-    if (accZ > 12) {
-      falls++;
-    }
-  }
+  // Handle incoming messages
+  client.on('message', (receivedTopic, message) => {
+      console.log(`Received message from topic "${receivedTopic}": ${message.toString()}`);
+      // Pass the message to the callback function
+      if (receivedTopic === 'data/heart') {
+          storedDataHeart.push(JSON.parse(message.toString()));
+      } else if (receivedTopic === 'data/acc') {
+          storedDataAcc.push(JSON.parse(message.toString()));
+      }
+        // Check for falls in the last 10 data entries
+      falls = 0;
+      for (let i = Math.max(storedDataAcc.length - 10, 0); i < storedDataAcc.length; i++) {
+        const accZ = storedDataAcc[i].acc.z;
+        if (accZ > 12) {
+          falls++;
+        }
+      }
 
-  res.status(200).send('Data received and stored successfully!');
-});
 
+      //return(message.toString());
+  });
+
+  // Handle errors
+  client.on('error', (error) => {
+      console.error('Error:', error);
+  });
+
+  // Handle close event
+  client.on('close', () => {
+      console.log('Connection to MQTT broker closed');
+  });
+}
+retrieveMqttData();
 // Route to display the stored data
 app.get('/', (req, res) => {
+
   const html = `
     <!DOCTYPE html>
     <html lang="en">
@@ -48,21 +87,20 @@ app.get('/', (req, res) => {
       }
     </style>
     </head>
-
     <body class="p-8">
       <div class="max-w-lg mx-auto">
           <h1 class="text-3xl font-bold mb-6">Data Display</h1>
           <div class="bg-gray-900 p-6 rounded-lg mb-4">
               <h2 class="text-xl font-bold mb-4">Heart Rate</h2>
-              <p id="heartRate" class="text-3xl font-bold text-rose-400">${storedData.length > 0 ? storedData[storedData.length - 1].heartJ.heart_avg + " BPM" : ""}</p>
+              <p id="heartRate" class="text-3xl font-bold text-rose-400">${storedDataHeart.length > 0 ? storedDataHeart[storedDataHeart.length - 1].heartJ.heart_avg + " BPM" : ""}</p>
           </div>
           <div class="bg-gray-900 p-6 rounded-lg mb-4">
               <h2 class="text-xl font-bold mb-4">Acceleration</h2>
-              <p id="acceleration" class="text-3xl font-bold text-slate-400">${storedData.length > 0 ? storedData[storedData.length - 1].acc.z + " m/s^2" : ""}</p>
+              <p id="acceleration" class="text-3xl font-bold text-slate-400">${storedDataAcc.length > 0 ? storedDataAcc[storedDataAcc.length - 1].acc.z + " m/s^2" : ""}</p>
           </div>
           <div class="bg-gray-900 p-6 rounded-lg">
               <h2 class="text-xl font-bold mb-4">Temperature</h2>
-              <p id="temperature" class="text-3xl font-bold text-slate-400">${storedData.length > 0 ? storedData[storedData.length - 1].acc.temp + " C" : ""}</p>
+              <p id="temperature" class="text-3xl font-bold text-slate-400">${storedDataAcc.length > 0 ? storedDataAcc[storedDataAcc.length - 1].acc.temp + " C" : ""}</p>
           </div>
           <div class="bg-gray-900 p-6 rounded-lg">
               <h2 class="text-xl font-bold mb-4">Falls</h2>
@@ -104,9 +142,8 @@ app.get('/', (req, res) => {
     </html>
   `;
 
-  res.send(html);
+      res.send(html);
 });
-
 // Start the server
 app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);
